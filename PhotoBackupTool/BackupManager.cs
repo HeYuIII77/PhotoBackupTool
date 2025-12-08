@@ -118,7 +118,16 @@ namespace PhotoBackupTool
                         {
                             try
                             {
-                                await ProcessFileAsync(sourceFile, totalFiles, () => Interlocked.Read(ref cumulativeBytes), totalBytesAll, stopwatch);
+                                try
+                                {
+                                    await ProcessFileAsync(sourceFile, totalFiles, () => Interlocked.Read(ref cumulativeBytes), totalBytesAll, stopwatch);
+                                }
+                                catch (Exception ex)
+                                {
+                                    ErrorLogger.LogException(ex, settings, totalFiles, processedFiles, sourceFile);
+                                    throw;
+                                }
+
                                 try { Interlocked.Add(ref cumulativeBytes, new FileInfo(sourceFile).Length); } catch { }
                                 Interlocked.Increment(ref processedFiles);
                                 worker.ReportProgress(CalculateProgress(processedFiles, totalFiles), $"已复制: {Path.GetFileName(sourceFile)}");

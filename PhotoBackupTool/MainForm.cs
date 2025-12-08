@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
@@ -21,6 +22,79 @@ namespace PhotoBackupTool
             InitializeVideoFormats();
             InitializeControls();
             InitializeBackgroundWorker();
+            // 确保程序启动时存在 Error 文件夹
+            try { EnsureErrorFolderExists(); } catch { }
+        }
+
+        private void btnOpenErrorFolder_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                var errDir = Path.Combine(baseDir, "Error");
+                if (!Directory.Exists(errDir))
+                {
+                    MessageBox.Show("错误文件夹不存在。", "信息", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                System.Diagnostics.Process.Start("explorer.exe", errDir);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"无法打开错误文件夹: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void btnExportLog_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                var errDir = Path.Combine(baseDir, "Error");
+                if (!Directory.Exists(errDir))
+                {
+                    MessageBox.Show("没有错误日志可导出。", "信息", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                using (var dlg = new FolderBrowserDialog())
+                {
+                    dlg.Description = "选择导出错误日志的目标文件夹";
+                    dlg.SelectedPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+                    if (dlg.ShowDialog() != DialogResult.OK)
+                        return;
+
+                    var destRoot = Path.Combine(dlg.SelectedPath, $"ErrorExport_{DateTime.Now:yyyyMMdd_HHmmss}");
+                    CopyDirectory(errDir, destRoot);
+                    MessageBox.Show($"错误日志已导出到: {destRoot}", "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"导出错误日志失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void EnsureErrorFolderExists()
+        {
+            var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            var errDir = Path.Combine(baseDir, "Error");
+            if (!Directory.Exists(errDir)) Directory.CreateDirectory(errDir);
+        }
+
+        private void CopyDirectory(string sourceDir, string destDir)
+        {
+            Directory.CreateDirectory(destDir);
+            foreach (var file in Directory.GetFiles(sourceDir))
+            {
+                var destFile = Path.Combine(destDir, Path.GetFileName(file));
+                File.Copy(file, destFile, true);
+            }
+            foreach (var dir in Directory.GetDirectories(sourceDir))
+            {
+                var destSub = Path.Combine(destDir, Path.GetFileName(dir));
+                CopyDirectory(dir, destSub);
+            }
         }
 
         private void InitializePhotoFormats()
@@ -308,6 +382,8 @@ namespace PhotoBackupTool
             }
             catch (Exception ex)
             {
+                // 记录详细错误到 Error 文件夹
+                try { ErrorLogger.LogException(ex, settings); } catch { }
                 e.Result = ex;
             }
         }

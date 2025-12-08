@@ -65,6 +65,8 @@ namespace PhotoBackupTool
             this.grpSettings = new System.Windows.Forms.GroupBox();
             this.lblParallelism = new System.Windows.Forms.Label();
             this.nudParallelism = new System.Windows.Forms.NumericUpDown();
+            this.btnOpenErrorFolder = new System.Windows.Forms.Button();
+            this.btnExportLog = new System.Windows.Forms.Button();
             this.grpProgress = new System.Windows.Forms.GroupBox();
             this.lblTotalProgress = new System.Windows.Forms.Label();
             this.grpFolders.SuspendLayout();
@@ -129,7 +131,7 @@ namespace PhotoBackupTool
             this.btnStartBackup.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.btnStartBackup.Font = new System.Drawing.Font("Microsoft Sans Serif", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.btnStartBackup.ForeColor = System.Drawing.Color.White;
-            this.btnStartBackup.Location = new System.Drawing.Point(608, 520);
+            this.btnStartBackup.Location = new System.Drawing.Point(608, 543);
             this.btnStartBackup.Margin = new System.Windows.Forms.Padding(3, 4, 3, 4);
             this.btnStartBackup.Name = "btnStartBackup";
             this.btnStartBackup.Size = new System.Drawing.Size(280, 50);
@@ -259,7 +261,7 @@ namespace PhotoBackupTool
             this.chkListRawFormats.Location = new System.Drawing.Point(311, 54);
             this.chkListRawFormats.Margin = new System.Windows.Forms.Padding(3, 4, 3, 4);
             this.chkListRawFormats.Name = "chkListRawFormats";
-            this.chkListRawFormats.Size = new System.Drawing.Size(250, 130);
+            this.chkListRawFormats.Size = new System.Drawing.Size(250, 148);
             this.chkListRawFormats.TabIndex = 7;
             // 
             // chkListVideoFormats
@@ -270,7 +272,7 @@ namespace PhotoBackupTool
             this.chkListVideoFormats.Location = new System.Drawing.Point(21, 54);
             this.chkListVideoFormats.Margin = new System.Windows.Forms.Padding(3, 4, 3, 4);
             this.chkListVideoFormats.Name = "chkListVideoFormats";
-            this.chkListVideoFormats.Size = new System.Drawing.Size(250, 130);
+            this.chkListVideoFormats.Size = new System.Drawing.Size(250, 148);
             this.chkListVideoFormats.TabIndex = 7;
             // 
             // lblRawFormats
@@ -312,7 +314,7 @@ namespace PhotoBackupTool
             this.lblParallelHelp.Cursor = System.Windows.Forms.Cursors.Help;
             this.lblParallelHelp.Font = new System.Drawing.Font("Microsoft Sans Serif", 10F, System.Drawing.FontStyle.Bold);
             this.lblParallelHelp.ForeColor = System.Drawing.Color.DarkOrange;
-            this.lblParallelHelp.Location = new System.Drawing.Point(216, 94);
+            this.lblParallelHelp.Location = new System.Drawing.Point(248, 95);
             this.lblParallelHelp.Name = "lblParallelHelp";
             this.lblParallelHelp.Size = new System.Drawing.Size(17, 17);
             this.lblParallelHelp.TabIndex = 20;
@@ -399,7 +401,7 @@ namespace PhotoBackupTool
             this.grpFormatSelection.Font = new System.Drawing.Font("Microsoft Sans Serif", 10F, System.Drawing.FontStyle.Bold);
             this.grpFormatSelection.Location = new System.Drawing.Point(20, 200);
             this.grpFormatSelection.Name = "grpFormatSelection";
-            this.grpFormatSelection.Size = new System.Drawing.Size(580, 200);
+            this.grpFormatSelection.Size = new System.Drawing.Size(580, 217);
             this.grpFormatSelection.TabIndex = 25;
             this.grpFormatSelection.TabStop = false;
             this.grpFormatSelection.Text = "文件格式选择";
@@ -409,13 +411,15 @@ namespace PhotoBackupTool
             this.grpSettings.Controls.Add(this.lblParallelHelp);
             this.grpSettings.Controls.Add(this.lblParallelism);
             this.grpSettings.Controls.Add(this.nudParallelism);
+            this.grpSettings.Controls.Add(this.btnOpenErrorFolder);
+            this.grpSettings.Controls.Add(this.btnExportLog);
             this.grpSettings.Controls.Add(this.lblDuplicateAction);
             this.grpSettings.Controls.Add(this.cmbDuplicateAction);
             this.grpSettings.Controls.Add(this.lstLog);
             this.grpSettings.Font = new System.Drawing.Font("Microsoft Sans Serif", 10F, System.Drawing.FontStyle.Bold);
             this.grpSettings.Location = new System.Drawing.Point(608, 200);
             this.grpSettings.Name = "grpSettings";
-            this.grpSettings.Size = new System.Drawing.Size(280, 307);
+            this.grpSettings.Size = new System.Drawing.Size(280, 336);
             this.grpSettings.TabIndex = 26;
             this.grpSettings.TabStop = false;
             this.grpSettings.Text = "备份设置与日志";
@@ -433,7 +437,7 @@ namespace PhotoBackupTool
             // nudParallelism
             // 
             this.nudParallelism.Font = new System.Drawing.Font("Microsoft Sans Serif", 10F);
-            this.nudParallelism.Location = new System.Drawing.Point(150, 92);
+            this.nudParallelism.Location = new System.Drawing.Point(145, 93);
             this.nudParallelism.Margin = new System.Windows.Forms.Padding(3, 4, 3, 4);
             this.nudParallelism.Maximum = new decimal(new int[] {
             32,
@@ -446,13 +450,35 @@ namespace PhotoBackupTool
             0,
             0});
             this.nudParallelism.Name = "nudParallelism";
-            this.nudParallelism.Size = new System.Drawing.Size(60, 23);
+            this.nudParallelism.Size = new System.Drawing.Size(92, 23);
             this.nudParallelism.TabIndex = 19;
             this.nudParallelism.Value = new decimal(new int[] {
             4,
             0,
             0,
             0});
+            // 
+            // btnOpenErrorFolder
+            // 
+            this.btnOpenErrorFolder.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F);
+            this.btnOpenErrorFolder.Location = new System.Drawing.Point(15, 300);
+            this.btnOpenErrorFolder.Name = "btnOpenErrorFolder";
+            this.btnOpenErrorFolder.Size = new System.Drawing.Size(120, 28);
+            this.btnOpenErrorFolder.TabIndex = 21;
+            this.btnOpenErrorFolder.Text = "查看异常信息文件";
+            this.btnOpenErrorFolder.UseVisualStyleBackColor = true;
+            this.btnOpenErrorFolder.Click += new System.EventHandler(this.btnOpenErrorFolder_Click);
+            // 
+            // btnExportLog
+            // 
+            this.btnExportLog.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F);
+            this.btnExportLog.Location = new System.Drawing.Point(145, 300);
+            this.btnExportLog.Name = "btnExportLog";
+            this.btnExportLog.Size = new System.Drawing.Size(120, 28);
+            this.btnExportLog.TabIndex = 22;
+            this.btnExportLog.Text = "导出异常信息";
+            this.btnExportLog.UseVisualStyleBackColor = true;
+            this.btnExportLog.Click += new System.EventHandler(this.btnExportLog_Click);
             // 
             // grpProgress
             // 
@@ -464,9 +490,9 @@ namespace PhotoBackupTool
             this.grpProgress.Controls.Add(this.progressBarFile);
             this.grpProgress.Controls.Add(this.lblElapsed);
             this.grpProgress.Font = new System.Drawing.Font("Microsoft Sans Serif", 10F, System.Drawing.FontStyle.Bold);
-            this.grpProgress.Location = new System.Drawing.Point(20, 410);
+            this.grpProgress.Location = new System.Drawing.Point(20, 423);
             this.grpProgress.Name = "grpProgress";
-            this.grpProgress.Size = new System.Drawing.Size(580, 160);
+            this.grpProgress.Size = new System.Drawing.Size(580, 170);
             this.grpProgress.TabIndex = 27;
             this.grpProgress.TabStop = false;
             this.grpProgress.Text = "进度信息";
@@ -486,7 +512,7 @@ namespace PhotoBackupTool
             this.AutoScaleDimensions = new System.Drawing.SizeF(8F, 16F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.BackColor = System.Drawing.Color.White;
-            this.ClientSize = new System.Drawing.Size(900, 590);
+            this.ClientSize = new System.Drawing.Size(900, 603);
             this.Controls.Add(this.grpProgress);
             this.Controls.Add(this.grpSettings);
             this.Controls.Add(this.grpFormatSelection);
@@ -548,5 +574,7 @@ namespace PhotoBackupTool
         private System.Windows.Forms.NumericUpDown nudParallelism;
         private System.Windows.Forms.Label lblParallelism;
         private System.Windows.Forms.Label lblParallelHelp;
+        private System.Windows.Forms.Button btnOpenErrorFolder;
+        private System.Windows.Forms.Button btnExportLog;
     }
 }
