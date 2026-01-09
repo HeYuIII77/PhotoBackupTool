@@ -73,14 +73,14 @@
 
 ## 文件结构
 PhotoBackupTool/
-├── MainForm.cs                # 主窗体逻辑与 UI 交互
-├── MainForm.Designer.cs       # WinForms 界面定义
-├── BackupManager.cs           # 核心备份与并行复制逻辑
-├── BackupSettings.cs          # 备份配置模型
-├── ErrorLogger.cs             # 错误与异常日志
-├── Program.cs                 # 程序入口
-├── PhotoBackupTool.csproj     # 项目文件
-└── README.md                  # 使用说明
+├── MainForm.cs                # 主窗体逻辑与 UI 交互    
+├── MainForm.Designer.cs       # WinForms 界面定    
+├── BackupManager.cs           # 核心备份与并行复制逻辑    
+├── BackupSettings.cs          # 备份配置模型    
+├── ErrorLogger.cs             # 错误与异常日志    
+├── Program.cs                 # 程序入口    
+├── PhotoBackupTool.csproj     # 项目文件    
+└── README.md                  # 使用说明    
 
 
 ## 运行环境
