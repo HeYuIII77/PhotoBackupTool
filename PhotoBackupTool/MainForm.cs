@@ -292,7 +292,7 @@ namespace PhotoBackupTool
 
             btnStartBackup.Enabled = false;
             lstLog.Items.Clear();
-            // lstLog.Items.Add("开始备份..."); // 由 BackupManager 记录，避免重复
+            AddLog("开始备份...");
 
             var settings = new BackupSettings
             {
@@ -300,7 +300,7 @@ namespace PhotoBackupTool
                 JpegDestinationPath = txtJpegDestPath.Text,
                 RawDestinationPath = txtRawDestPath.Text,
                 VideoDestinationPath = txtVideoDestPath.Text,
-                SelectedRawFormats = GetSelectedRawFormats(),
+                SelectedRawFormats = GetSelectedRawFormats(),           
                 SelectedVideoFormats = GetSelectedVideoFormats(),
                 DuplicateAction = (DuplicateAction)cmbDuplicateAction.SelectedIndex,
                 PreserveFolderStructure = true, // 默认保留目录结构，可后续加UI选项
@@ -309,8 +309,6 @@ namespace PhotoBackupTool
 
             // 保存并行度到设置
             SaveParallelismSetting();
-            // 在开始备份前创建通道控件（按并行度）以显示每个通道的进度
-            try { EnsureChannelControls(int.Parse(cmbParallelism.SelectedItem.ToString())); } catch { }
             backupWorker.RunWorkerAsync(settings);
         }
 
@@ -393,50 +391,32 @@ namespace PhotoBackupTool
             }
         }
 
+        private const int MaxLogLines = 200;
+        private void AddLog(string msg)
+        {
+            if (string.IsNullOrEmpty(msg)) return;
+            try
+            {
+                // Ensure UI thread
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action(() => AddLog(msg)));
+                    return;
+                }
+
+                lstLog.Items.Add(msg);
+                // remove oldest entries beyond limit
+                while (lstLog.Items.Count > MaxLogLines)
+                    lstLog.Items.RemoveAt(0);
+                lstLog.SelectedIndex = lstLog.Items.Count - 1;
+                lstLog.ClearSelected();
+            }
+            catch { }
+        }
+
         private void EnsureChannelControls(int channelCount)
         {
-            if (flpChannels == null) return;
-            // 如果已经存在相同数量的进度条则直接返回
-            if (flpChannels.Controls.Count == channelCount) return;
-            flpChannels.Controls.Clear();
 
-            // 当通道小于等于4时，显示为单列，等于或大于5时启用滚动条（flpChannels 已配置 AutoScroll）
-            for (int i = 0; i < channelCount; i++)
-            {
-                var panel = new Panel { Width = flpChannels.Width - 25, Height = 44, Margin = new Padding(2) };
-                var lbl = new Label
-                {
-                    Name = $"lblFile_{i}",
-                    Text = $"通道 {i + 1}",
-                    AutoSize = false,
-                    Width = panel.Width - 80,
-                    Height = 18,
-                    Location = new Point(0, 0),
-                    TextAlign = ContentAlignment.MiddleLeft
-                };
-                var pb = new ProgressBar
-                {
-                    Name = $"pb_{i}",
-                    Width = panel.Width - 100,
-                    Height = 16,
-                    Value = 0,
-                    Location = new Point(0, 20)
-                };
-                var lblThroughput = new Label
-                {
-                    Name = $"lblThroughput_{i}",
-                    Text = "",
-                    AutoSize = false,
-                    Width = 80,
-                    Height = 18,
-                    Location = new Point(panel.Width - 80, 18),
-                    TextAlign = ContentAlignment.MiddleRight
-                };
-                panel.Controls.Add(lbl);
-                panel.Controls.Add(pb);
-                panel.Controls.Add(lblThroughput);
-                flpChannels.Controls.Add(panel);
-            }
         }
 
         private void BackupWorker_ProgressChanged(object sender, ProgressChangedEventArgs e)
@@ -448,45 +428,9 @@ namespace PhotoBackupTool
                 progressBar.Value = Math.Max(0, Math.Min(100, info.OverallPercent));
                 lblProgress.Text = $"{info.OverallPercent}%";
 
-                // 如果提供通道ID，则在对应通道上显示进度和文件名
-                if (info.ChannelId >= 0 && this.flpChannels != null)
-                {
-                    // 确保通道UI存在
-                    EnsureChannelControls(Math.Max(1, Properties.Settings.Default.MaxDegreeOfParallelism));
-                    var idx = info.ChannelId;
-                    if (idx < flpChannels.Controls.Count)
-                    {
-                        var panel = flpChannels.Controls[idx] as Panel;
-                            if (panel != null)
-                            {
-                                var pb = panel.Controls.OfType<ProgressBar>().FirstOrDefault();
-                                var lbl = panel.Controls.OfType<Label>().FirstOrDefault();
-                                var lblThroughput = panel.Controls.OfType<Label>().FirstOrDefault(l => l.Name == $"lblThroughput_{idx}");
-                                if (pb != null)
-                                    pb.Value = Math.Max(0, Math.Min(100, info.FilePercent));
-                                if (lbl != null)
-                                {
-                                    var displayName = info.FileName != null ? (info.FileName.Length > 40 ? info.FileName.Substring(0, 37) + "..." : info.FileName) : string.Empty;
-                                    lbl.Text = !string.IsNullOrEmpty(displayName) ? $"通道 {idx + 1}: {displayName}" : $"通道 {idx + 1}";
-                                }
-                                // 设置 ToolTip 为完整文件名
-                                if (!string.IsNullOrEmpty(info.FileName)) toolTip.SetToolTip(panel, info.FileName);
-                                if (lblThroughput != null)
-                                    lblThroughput.Text = info.ThroughputBytesPerSecond > 0 ? $"{(info.ThroughputBytesPerSecond / (1024.0 * 1024.0)):F2} MB/s" : "";
-                            }
-                    }
-
-                    // 更新总体进度信息：已备份文件数/总文件数、已用时间、ETA
-                    if (this.lblTotalProgress != null)
-                        lblTotalProgress.Text = $"{info.ProcessedFiles}/{info.TotalFiles} 文件";
-                    if (this.lblElapsed != null)
-                        lblElapsed.Text = $"已用时间：{TimeSpan.FromSeconds(info.ElapsedSeconds):hh\\:mm\\:ss}";
-                    if (this.lblETA != null)
-                        lblETA.Text = info.EstimatedRemainingSeconds > 0 ? $"预计剩余：{TimeSpan.FromSeconds(info.EstimatedRemainingSeconds):hh\\:mm\\:ss}" : "预计剩余：未知";
-                }
-                // 不再使用单独的“当前文件进度”控件，所有文件进度通过通道显示
-
-                // 已用时间和 ETA
+                // 更新总体进度信息（不显示通道级别进度）
+                if (this.lblTotalProgress != null)
+                    lblTotalProgress.Text = $"{info.ProcessedFiles}/{info.TotalFiles} 文件";
                 var elapsed = TimeSpan.FromSeconds(info.ElapsedSeconds);
                 var eta = info.EstimatedRemainingSeconds >= 0 ? TimeSpan.FromSeconds(info.EstimatedRemainingSeconds) : (TimeSpan?)null;
                 if (this.lblElapsed != null)
@@ -498,11 +442,19 @@ namespace PhotoBackupTool
             }
             else if (e.UserState is string msg)
             {
+                // 特殊消息："CHANNELS:{n}" 用来创建通道控件
+                if (msg != null && msg.StartsWith("CHANNELS:"))
+                {
+                    if (int.TryParse(msg.Substring("CHANNELS:".Length), out int ch))
+                    {
+                        try { EnsureChannelControls(Math.Max(1, ch)); } catch { }
+                    }
+                    return;
+                }
+
                 progressBar.Value = Math.Max(0, Math.Min(100, e.ProgressPercentage));
                 lblProgress.Text = $"{e.ProgressPercentage}% - {msg}";
-                lstLog.Items.Add(msg);
-                lstLog.SelectedIndex = lstLog.Items.Count - 1;
-                lstLog.ClearSelected();
+                AddLog(msg);
             }
             else
             {
@@ -519,7 +471,7 @@ namespace PhotoBackupTool
             if (e.Error != null || e.Result is Exception)
             {
                 var exception = e.Error ?? (Exception)e.Result;
-                lstLog.Items.Add($"备份失败: {exception.Message}");
+                AddLog($"备份失败: {exception.Message}");
                 MessageBox.Show($"备份过程中发生错误: {exception.Message}", "错误",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }

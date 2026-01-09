@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -6,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using BackgroundWorker = System.ComponentModel.BackgroundWorker;
 
 namespace PhotoBackupTool
 {
@@ -17,7 +19,7 @@ namespace PhotoBackupTool
         public int ChannelId { get; set; } = -1; // -1 表示无通道信息
         public int ProcessedFiles { get; set; }
         public int TotalFiles { get; set; }
-            public double ThroughputBytesPerSecond { get; set; }
+        public double ThroughputBytesPerSecond { get; set; }
         public double ElapsedSeconds { get; set; }
         public double EstimatedRemainingSeconds { get; set; }
     }
@@ -48,217 +50,69 @@ namespace PhotoBackupTool
 
         private async Task PerformBackupAsync()
         {
+            // 1) 预建目录等（保留原逻辑）
             Directory.CreateDirectory(settings.JpegDestinationPath);
             Directory.CreateDirectory(settings.RawDestinationPath);
-            if (!string.IsNullOrEmpty(settings.VideoDestinationPath))
-                Directory.CreateDirectory(settings.VideoDestinationPath);
+            if (!string.IsNullOrEmpty(settings.VideoDestinationPath)) Directory.CreateDirectory(settings.VideoDestinationPath);
 
-            var allFiles = Directory.GetFiles(settings.SourcePath, "*.*", SearchOption.AllDirectories)
-                .Where(f => IsMediaFile(f)).ToArray();
+            // 2) 扫描
+            var scanner = new Scanner(settings);
+            var items = scanner.Scan();
 
-            int totalFiles = allFiles.Length;
+            // 3) 统计总字节
+            long totalBytesAll = items.Sum(i => i.Length);
 
-            long totalBytesAll = 0;
-            foreach (var f in allFiles)
+            // 4) 聚合器
+            var stopwatch = Stopwatch.StartNew();
+            var inProgressBytes = new ConcurrentDictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            long completedBytes = 0;
+            long processedFiles = 0;
+            void AddCompleted(long b) => Interlocked.Add(ref completedBytes, b);
+            void AddProcessedFile() => Interlocked.Increment(ref processedFiles);
+
+            var aggregator = new ProgressAggregator(worker, () => Interlocked.Read(ref completedBytes), () => inProgressBytes.Values.Sum(), stopwatch, 150, totalBytesAll, () => (int)Interlocked.Read(ref processedFiles), items.Count);
+            aggregator.Start();
+
+            // 5) Scheduler：创建固定数量的通道（等于并行度），并将任务轮询分配到各通道
+            int totalChannels = Math.Max(1, settings.MaxDegreeOfParallelism);
+            try { worker.ReportProgress(0, $"CHANNELS:{totalChannels}"); } catch { }
+
+            var queues = new List<BlockingCollection<BackupItem>>(totalChannels);
+            int approxPerQueue = Math.Max(100, Math.Max(1, items.Count() / totalChannels));
+            for (int i = 0; i < totalChannels; i++)
+                queues.Add(new BlockingCollection<BackupItem>(boundedCapacity: approxPerQueue));
+
+            int assign = 0;
+            foreach (var it in items)
             {
-                try { totalBytesAll += new FileInfo(f).Length; } catch { }
+                queues[assign].Add(it);
+                assign = (assign + 1) % totalChannels;
             }
 
-            // 预先在目标侧创建完整目录树，避免并行复制时出现目录未创建的竞态
+            foreach (var q in queues) q.CompleteAdding();
+
+            var cts = new CancellationTokenSource();
+            var consumerTasks = new List<Task>();
+            for (int ch = 0; ch < totalChannels; ch++)
+            {
+                var q = queues[ch];
+                var workerTask = new CopyWorker(q, inProgressBytes, AddCompleted, AddProcessedFile, aggregator, ch, cts.Token, stopwatch).RunAsync();
+                consumerTasks.Add(workerTask);
+            }
+
+            // 6) 等待完成
+            await Task.WhenAll(consumerTasks).ConfigureAwait(false);
+
+            // 7) 停止聚合器并最终报告
+            aggregator.Stop();
+            stopwatch.Stop();
             try
             {
-                var dirsSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var f in allFiles)
-                {
-                    var ext = Path.GetExtension(f);
-                    var fileName = Path.GetFileName(f);
-                    var dest = GetDestinationPath(f, ext, fileName);
-                    var dir = Path.GetDirectoryName(dest);
-                    if (!string.IsNullOrEmpty(dir))
-                        dirsSet.Add(dir);
-                }
-
-                var dirs = dirsSet.ToList();
-                int totalDirs = dirs.Count;
-                int createdCount = 0;
-                if (totalDirs > 0)
-                {
-                    worker.ReportProgress(0, $"正在预创建目标目录 ({totalDirs} 个)...");
-                    int reportStep = Math.Max(1, totalDirs / 100);
-                    for (int i = 0; i < totalDirs; i++)
-                    {
-                        var d = dirs[i];
-                        try
-                        {
-                            if (!Directory.Exists(d))
-                                Directory.CreateDirectory(d);
-                            createdCount++;
-                        }
-                        catch (Exception ex)
-                        {
-                            // 记录目录创建失败但继续尝试其他目录
-                            try { ErrorLogger.LogException(ex, settings, allFiles.Length, 0, d); } catch { }
-                        }
-
-                        if ((i % reportStep) == 0 || i == totalDirs - 1)
-                        {
-                            int pct = totalDirs > 0 ? (int)((i + 1) * 100 / totalDirs) : 100;
-                            worker.ReportProgress(pct, $"预创建目录: {i + 1}/{totalDirs}");
-                        }
-                    }
-
-                    worker.ReportProgress(0, $"已预创建 {createdCount} 个目录");
-                }
-            }
-            catch (Exception ex)
-            {
-                try { ErrorLogger.LogException(ex, settings); } catch { }
-            }
-
-            long cumulativeBytes = 0;
-            var stopwatch = Stopwatch.StartNew();
-
-            // 初始化通道控制结构
-            int maxCh = Math.Max(1, settings.MaxDegreeOfParallelism);
-            var channelSemaphore = new SemaphoreSlim(maxCh, maxCh);
-            var channelUsed = new bool[maxCh];
-            var channelLock = new object();
-
-            Func<int> acquireChannel = () =>
-            {
-                channelSemaphore.Wait();
-                lock (channelLock)
-                {
-                    for (int i = 0; i < channelUsed.Length; i++)
-                    {
-                        if (!channelUsed[i])
-                        {
-                            channelUsed[i] = true;
-                            return i;
-                        }
-                    }
-                }
-                // should not reach here
-                return 0;
-            };
-
-            Action<int> releaseChannel = (id) =>
-            {
-                lock (channelLock)
-                {
-                    if (id >= 0 && id < channelUsed.Length) channelUsed[id] = false;
-                }
-                channelSemaphore.Release();
-            };
-
-            worker.ReportProgress(0, "开始备份...");
-
-            if (settings.MaxDegreeOfParallelism <= 1)
-            {
-                int processedFiles = 0;
-                foreach (var sourceFile in allFiles)
-                {
-                    if (worker.CancellationPending)
-                        break;
-
-                    try
-                    {
-                        // 使用 channelId = 0 表示单通道，用于 UI 更新
-                        await ProcessFileAsync(sourceFile, totalFiles, () => Interlocked.Read(ref cumulativeBytes), totalBytesAll, stopwatch, 0);
-                        try { Interlocked.Add(ref cumulativeBytes, new FileInfo(sourceFile).Length); } catch { }
-                        Interlocked.Increment(ref processedFiles);
-                        worker.ReportProgress(CalculateProgress(processedFiles, totalFiles), new BackupProgressInfo
-                        {
-                            OverallPercent = CalculateProgress(processedFiles, totalFiles),
-                            FilePercent = 100,
-                            FileName = Path.GetFileName(sourceFile),
-                            ChannelId = 0,
-                            ProcessedFiles = processedFiles,
-                            TotalFiles = totalFiles,
-                            ElapsedSeconds = stopwatch.Elapsed.TotalSeconds,
-                            EstimatedRemainingSeconds = 0
-                        });
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-                }
-            }
-            else
-            {
-                // 更激进的并行策略：按目标盘符分组，限制每盘并发
-                var groups = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-                foreach (var f in allFiles)
-                {
-                    string dest = GetDestinationRoot(f);
-                    if (!groups.ContainsKey(dest)) groups[dest] = new List<string>();
-                    groups[dest].Add(f);
-                }
-
-                var semaphores = new Dictionary<string, SemaphoreSlim>(StringComparer.OrdinalIgnoreCase);
-                int perDiskConcurrency = Math.Max(1, settings.MaxDegreeOfParallelism / Math.Max(1, groups.Count));
-                foreach (var g in groups.Keys)
-                    semaphores[g] = new SemaphoreSlim(perDiskConcurrency);
-
-                var tasks = new List<Task>();
-                int processedFiles = 0;
-
-                foreach (var kv in groups)
-                {
-                    var root = kv.Key;
-                    var list = kv.Value;
-                    foreach (var sourceFile in list)
-                    {
-                        if (worker.CancellationPending) break;
-                        var sem = semaphores[root];
-                        await sem.WaitAsync();
-                        var t = Task.Run(async () =>
-                        {
-                            int channelId = -1;
-                            try
-                            {
-                                try
-                                {
-                                    // Acquire a logical channel id for per-channel progress
-                                    channelId = acquireChannel();
-                                    await ProcessFileAsync(sourceFile, totalFiles, () => Interlocked.Read(ref cumulativeBytes), totalBytesAll, stopwatch, channelId);
-                                }
-                                catch (Exception ex)
-                                {
-                                    ErrorLogger.LogException(ex, settings, totalFiles, processedFiles, sourceFile);
-                                    throw;
-                                }
-
-                                try { Interlocked.Add(ref cumulativeBytes, new FileInfo(sourceFile).Length); } catch { }
-                                Interlocked.Increment(ref processedFiles);
-                                worker.ReportProgress(CalculateProgress(processedFiles, totalFiles), new BackupProgressInfo
-                                {
-                                    OverallPercent = CalculateProgress(processedFiles, totalFiles),
-                                    FilePercent = 100,
-                                    FileName = Path.GetFileName(sourceFile),
-                                    ChannelId = channelId,
-                                    ProcessedFiles = processedFiles,
-                                    TotalFiles = totalFiles,
-                                    ElapsedSeconds = stopwatch.Elapsed.TotalSeconds,
-                                    EstimatedRemainingSeconds = 0
-                                });
-                            }
-                            finally
-                            {
-                                try { releaseChannel(channelId); } catch { }
-                                sem.Release();
-                            }
-                        });
-                        tasks.Add(t);
-                    }
-                }
-
-                await Task.WhenAll(tasks);
-            }
-
-            stopwatch.Stop();
-            worker.ReportProgress(100, "备份完成！");
+                var elapsed = stopwatch.Elapsed;
+                var avgSpeed = elapsed.TotalSeconds > 0 ? (completedBytes / elapsed.TotalSeconds) : 0;
+                var elapsedStr = elapsed.ToString(@"hh\:mm\:ss");
+                worker.ReportProgress(100, $"备份完成！ 文件数: {processedFiles}, 用时: {elapsedStr}, 平均速度: {avgSpeed / (1024.0*1024.0):F2} MB/s");
+            } catch { }
         }
 
         private string GetDestinationRoot(string sourceFile)
@@ -278,6 +132,7 @@ namespace PhotoBackupTool
             return jpegExtensions.Contains(extension) || rawExtensions.Contains(extension) || videoExtensions.Contains(extension);
         }
 
+        // 原有的 ProcessFileAsync（保留）
         private async Task ProcessFileAsync(string sourceFile, int totalFiles, Func<long> getCumulativeBytes, long totalBytesAll, Stopwatch stopwatch, int channelId = -1)
         {
             var extension = Path.GetExtension(sourceFile);
@@ -306,6 +161,49 @@ namespace PhotoBackupTool
             }
 
             await CopyFileWithProgressAsync(sourceFile, destinationPath, getCumulativeBytes, totalBytesAll, stopwatch, channelId);
+        }
+
+        // 新增：兼容 9 参数重载（在并行改进调用处使用）
+        private async Task ProcessFileAsync(
+            string sourceFile,
+            int totalFiles,
+            ConcurrentDictionary<string, long> inProgressBytes,
+            Func<long> getCompletedBytes,
+            long totalBytesAll,
+            Stopwatch stopwatch,
+            ConcurrentDictionary<int, BackupProgressInfo> latestProgressByChannel,
+            CancellationToken token,
+            int channelId = -1)
+        {
+            token.ThrowIfCancellationRequested();
+
+            var extension = Path.GetExtension(sourceFile);
+            var fileName = Path.GetFileName(sourceFile);
+            string destinationPath = GetDestinationPath(sourceFile, extension, fileName);
+
+            if (File.Exists(destinationPath))
+            {
+                // 使用现有非原子重命名策略（保持与当前代码兼容）
+                destinationPath = HandleDuplicateFile(destinationPath);
+                if (destinationPath == null)
+                    return;
+            }
+
+            // 确保目标目录存在（处理保留目录结构时可能需要创建多级目录）
+            try
+            {
+                var destDir = Path.GetDirectoryName(destinationPath);
+                if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir))
+                    Directory.CreateDirectory(destDir);
+            }
+            catch (Exception ex)
+            {
+                // 记录并抛出，交由上层处理
+                ErrorLogger.LogException(ex, settings, totalFiles, 0, sourceFile);
+                throw;
+            }
+
+            await CopyFileWithProgressAsync(sourceFile, destinationPath, inProgressBytes, getCompletedBytes, totalBytesAll, stopwatch, latestProgressByChannel, token, channelId).ConfigureAwait(false);
         }
 
         private string GetDestinationPath(string sourceFile, string extension, string fileName)
@@ -375,6 +273,76 @@ namespace PhotoBackupTool
 
                     worker.ReportProgress(overallPercent, info);
                 }
+            }
+        }
+
+        // 新增：CopyFileWithProgressAsync 的并行版（支持 inProgressBytes 与 per-channel snapshot）
+        private async Task CopyFileWithProgressAsync(
+            string source,
+            string dest,
+            ConcurrentDictionary<string, long> inProgressBytes,
+            Func<long> getCompletedBytes,
+            long totalBytesAll,
+            Stopwatch stopwatch,
+            ConcurrentDictionary<int, BackupProgressInfo> latestProgressByChannel,
+            CancellationToken token,
+            int channelId = -1)
+        {
+            token.ThrowIfCancellationRequested();
+
+            using (var sourceStream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            using (var destStream = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, FileOptions.Asynchronous))
+            {
+                long totalBytes = sourceStream.Length;
+                long copiedBytes = 0;
+                byte[] buffer = new byte[bufferSize];
+                int bytesRead;
+                while ((bytesRead = await sourceStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    if (token.IsCancellationRequested || worker.CancellationPending)
+                    {
+                        try { destStream.Close(); File.Delete(dest); } catch { }
+                        throw new OperationCanceledException();
+                    }
+
+                    await destStream.WriteAsync(buffer, 0, bytesRead).ConfigureAwait(false);
+                    copiedBytes += bytesRead;
+
+                    // 更新 in-progress bytes（按文件路径），仅保留最新值
+                    inProgressBytes.AddOrUpdate(source, copiedBytes, (k, old) => copiedBytes);
+
+                    // 计算总体已完成字节（已完成 + in-progress）
+                    long inProgressSum = 0;
+                    foreach (var v in inProgressBytes.Values) inProgressSum += v;
+                    long overallCompletedBytes = getCompletedBytes() + inProgressSum;
+
+                    int overallPercent = totalBytesAll > 0 ? (int)(overallCompletedBytes * 100 / totalBytesAll) : 0;
+                    int filePercent = totalBytes > 0 ? (int)(copiedBytes * 100 / totalBytes) : 0;
+
+                    double elapsed = stopwatch.Elapsed.TotalSeconds;
+                    double speed = elapsed > 0 ? (overallCompletedBytes / elapsed) : 0; // bytes/sec
+                    double remainingSeconds = 0;
+                    if (speed > 0 && totalBytesAll > overallCompletedBytes)
+                        remainingSeconds = (totalBytesAll - overallCompletedBytes) / speed;
+
+                    var info = new BackupProgressInfo
+                    {
+                        OverallPercent = overallPercent,
+                        FilePercent = filePercent,
+                        FileName = Path.GetFileName(source),
+                        ChannelId = channelId,
+                        ThroughputBytesPerSecond = speed,
+                        ElapsedSeconds = elapsed,
+                        EstimatedRemainingSeconds = remainingSeconds
+                    };
+
+                    // 保留每通道最新状态，供限频上报器汇总
+                    latestProgressByChannel[channelId] = info;
+                }
+
+                // 文件复制完成：移除 inProgress 记录，已完成字节将由调用方累加到 completedBytes
+                long removed;
+                inProgressBytes.TryRemove(source, out removed);
             }
         }
 
